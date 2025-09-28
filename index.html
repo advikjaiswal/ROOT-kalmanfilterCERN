@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kalman Filter Track Reconstruction</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #111827; /* Tailwind gray-900 */
+            color: #f3f4f6; /* Tailwind gray-100 */
+        }
+        .visualization-container {
+            background-color: #1f2937; /* Tailwind gray-800 */
+            border: 1px solid #374151; /* Tailwind gray-700 */
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+        .loader {
+            border: 4px solid #4b5563; /* Tailwind gray-600 */
+            border-top: 4px solid #3b82f6; /* Tailwind blue-500 */
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const App = () => {
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState(null);
+            const d3Container = useRef(null);
+            
+            // --- Backend API URL ---
+            // For Vercel deployment, use the serverless function
+            const API_URL = '/api/run_simulation';
+            // For local development with Flask server, use:
+            // const API_URL = 'http://127.0.0.1:5000/run_simulation';
+
+            const fetchData = async () => {
+                setLoading(true);
+                setError(null);
+                setData(null);
+                try {
+                    const response = await fetch(API_URL);
+                    if (!response.ok) {
+                        const errData = await response.json();
+                        throw new Error(errData.details || `HTTP error! Status: ${response.status}`);
+                    }
+                    const result = await response.json();
+                    setData(result);
+                } catch (e) {
+                    console.error("Fetch error:", e);
+                    setError(e.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+            
+            useEffect(() => {
+                fetchData(); // Fetch data on initial load
+            }, []);
+
+
+            useEffect(() => {
+                if (data && d3Container.current) {
+                    // --- D3.js Visualization Logic ---
+                    const svg = d3.select(d3Container.current);
+                    svg.selectAll("*").remove(); // Clear previous render
+
+                    const width = 800;
+                    const height = 500;
+                    const margin = { top: 40, right: 40, bottom: 40, left: 60 };
+
+                    const allX = [
+                        ...data.true_track.map(d => d.x),
+                        ...data.hits.map(d => d.x),
+                        ...data.kf_track.map(d => d.x)
+                    ];
+                    const allY = [
+                        ...data.true_track.map(d => d.y),
+                        ...data.hits.map(d => d.y),
+                        ...data.kf_track.map(d => d.y)
+                    ];
+                    
+                    const xExtent = d3.extent(allX);
+                    const yExtent = d3.extent(allY);
+                    
+                    const xScale = d3.scaleLinear()
+                        .domain([0, xExtent[1] + 10])
+                        .range([margin.left, width - margin.right]);
+
+                    const yScale = d3.scaleLinear()
+                        .domain([yExtent[0] - 10, yExtent[1] + 10])
+                        .range([height - margin.bottom, margin.top]);
+
+                    // Axes
+                    svg.append("g")
+                        .attr("transform", `translate(0, ${height - margin.bottom})`)
+                        .call(d3.axisBottom(xScale))
+                        .attr("color", "#9ca3af");
+
+                    svg.append("g")
+                        .attr("transform", `translate(${margin.left}, 0)`)
+                        .call(d3.axisLeft(yScale))
+                        .attr("color", "#9ca3af");
+                        
+                    // Axis labels
+                    svg.append("text")
+                        .attr("text-anchor", "middle")
+                        .attr("x", width / 2)
+                        .attr("y", height - 5)
+                        .style("fill", "#d1d5db")
+                        .text("x (cm)");
+
+                    svg.append("text")
+                        .attr("text-anchor", "middle")
+                        .attr("transform", "rotate(-90)")
+                        .attr("y", 15)
+                        .attr("x", -height/2)
+                        .style("fill", "#d1d5db")
+                        .text("y (cm)");
+
+
+                    // Detector Layers
+                    svg.selectAll("line.detector")
+                        .data(data.detector_layers)
+                        .enter()
+                        .append("line")
+                        .attr("x1", d => xScale(d))
+                        .attr("x2", d => xScale(d))
+                        .attr("y1", yScale.range()[1])
+                        .attr("y2", yScale.range()[0])
+                        .attr("stroke", "#4b5563") // gray-600
+                        .attr("stroke-dasharray", "4,4");
+
+                    // True Track
+                    const line = d3.line()
+                        .x(d => xScale(d.x))
+                        .y(d => yScale(d.y));
+                    
+                    svg.append("path")
+                        .datum(data.true_track)
+                        .attr("fill", "none")
+                        .attr("stroke", "#60a5fa") // blue-400
+                        .attr("stroke-width", 1.5)
+                        .attr("stroke-dasharray", "5,5")
+                        .attr("d", line);
+
+                    // Simulated Hits
+                    svg.selectAll("circle.hit")
+                        .data(data.hits)
+                        .enter()
+                        .append("circle")
+                        .attr("cx", d => xScale(d.x))
+                        .attr("cy", d => yScale(d.y))
+                        .attr("r", 4)
+                        .attr("fill", "#f87171"); // red-400
+
+                    // Kalman Filter Reconstructed Track
+                    svg.append("path")
+                        .datum(data.kf_track)
+                        .attr("fill", "none")
+                        .attr("stroke", "#34d399") // emerald-400
+                        .attr("stroke-width", 2.5)
+                        .attr("d", line);
+
+                }
+            }, [data]);
+
+            return (
+                <div className="container mx-auto p-4 md:p-8">
+                    <div className="text-center mb-8">
+                        <h1 className="text-3xl md:text-4xl font-bold text-white">Kalman Filter Track Reconstruction</h1>
+                        <p className="text-lg text-gray-400 mt-2">A C++/ROOT backend with a React/D3.js frontend.</p>
+                    </div>
+
+                    <div className="flex justify-center mb-6">
+                        <button
+                            onClick={fetchData}
+                            disabled={loading}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                        >
+                            {loading && <div className="loader mr-3" style={{width: '20px', height: '20px', border:'2px solid #4b5563', borderTop:'2px solid white'}}></div>}
+                            {loading ? 'Simulating...' : 'Run New Simulation'}
+                        </button>
+                    </div>
+
+                    <div className="visualization-container p-4">
+                        {loading && <div className="flex justify-center items-center h-96"><div className="loader"></div></div>}
+                        {error && <div className="text-center text-red-400 p-4 h-96 flex justify-center items-center">
+                            <div>
+                                <h3 className="font-bold text-lg">Error connecting to backend</h3>
+                                <p className="text-sm mt-2 bg-gray-900 p-3 rounded">{error}</p>
+                            </div>
+                        </div>}
+                        <svg ref={d3Container} width="800" height="500" viewBox="0 0 800 500" className="mx-auto"></svg>
+                    </div>
+                    
+                    <div className="mt-6 flex justify-center space-x-8 text-sm text-gray-400">
+                        <div className="flex items-center"><div className="w-4 h-0.5 bg-red-400 mr-2" style={{borderTop:'4px solid #f87171'}}></div>Simulated Hit</div>
+                        <div className="flex items-center"><div className="w-4 h-0.5 bg-blue-400 mr-2" style={{borderTop:'2px dashed #60a5fa'}}></div>True Path</div>
+                        <div className="flex items-center"><div className="w-4 h-0.5 bg-emerald-400 mr-2" style={{borderTop:'3px solid #34d399'}}></div>KF Reconstructed</div>
+                    </div>
+
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>

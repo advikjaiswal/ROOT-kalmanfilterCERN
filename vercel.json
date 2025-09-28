@@ -1,0 +1,17 @@
+{
+  "functions": {
+    "api/run_simulation.py": {
+      "runtime": "python3.9"
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/run_simulation",
+      "dest": "/api/run_simulation.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}
